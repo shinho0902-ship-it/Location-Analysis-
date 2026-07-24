@@ -96,7 +96,7 @@
       <div><div class="label">만만마켓</div><div class="num" id="marketCount">-</div></div>
     </div>
     <div class="panel stat-card mart">
-      <div><div class="label">마트/슈퍼마켓</div><div class="num" id="martCount">-</div></div>
+      <div><div class="label">마트/슈퍼(동네 포함)</div><div class="num" id="martCount">-</div></div>
     </div>
     <div class="panel stat-card conv">
       <div><div class="label">편의점</div><div class="num" id="convCount">-</div></div>
@@ -191,6 +191,39 @@ function initApp() {
     });
   }
 
+  // 카테고리 그룹 코드 검색 (CS2=편의점, MT1=대형마트) — 프랜차이즈 편의점 등을 정확히 잡는다
+  function searchCategory(code, radius, callback) {
+    ps.categorySearch(code, (data, status) => {
+      if (status === kakao.maps.services.Status.OK) {
+        callback(data, null);
+      } else if (status === kakao.maps.services.Status.ZERO_RESULT) {
+        callback([], null);
+      } else {
+        callback([], '검색 실패 (status: ' + status + ')');
+      }
+    }, {
+      location: map.getCenter(),
+      radius: radius,
+      sort: kakao.maps.services.SortBy.DISTANCE
+    });
+  }
+
+  // 여러 검색을 실행해 결과를 합치고 매장 ID로 중복 제거한 뒤 한 번만 콜백
+  function searchMerged(tasks, callback) {
+    let remaining = tasks.length;
+    const all = [];
+    let lastErr = null;
+    tasks.forEach(task => task((places, err) => {
+      if (err) lastErr = err;
+      if (places && places.length) all.push(...places);
+      if (--remaining === 0) {
+        const seen = new Set();
+        const deduped = all.filter(p => (seen.has(p.id) ? false : seen.add(p.id)));
+        callback(deduped, deduped.length ? null : lastErr);
+      }
+    }));
+  }
+
   function renderMarketList(places, errorMessage) {
     const el = document.getElementById('marketList');
     if (errorMessage) {
@@ -226,9 +259,14 @@ function initApp() {
     });
 
     if (showMart) {
-      searchKeyword('마트', radius, (places, err) => {
+      // 대형마트(MT1 카테고리) + 동네 슈퍼/식자재마트(키워드)를 합쳐서 동네 경쟁점까지 포착
+      searchMerged([
+        cb => searchCategory('MT1', radius, cb),
+        cb => searchKeyword('슈퍼', radius, cb),
+        cb => searchKeyword('식자재마트', radius, cb)
+      ], (places, err) => {
         document.getElementById('martCount').textContent = err ? '-' : places.length;
-        places.slice(0, 20).forEach(p => addMarker(p, '#3d5a80', 10));
+        places.slice(0, 40).forEach(p => addMarker(p, '#3d5a80', 10));
         done();
       });
     } else {
@@ -236,9 +274,10 @@ function initApp() {
     }
 
     if (showConv) {
-      searchKeyword('편의점', radius, (places, err) => {
+      // 편의점(CS2 카테고리) — GS25/CU/세븐일레븐/이마트24 등 프랜차이즈 전부 포함
+      searchCategory('CS2', radius, (places, err) => {
         document.getElementById('convCount').textContent = err ? '-' : places.length;
-        places.slice(0, 20).forEach(p => addMarker(p, '#e09f3e', 10));
+        places.slice(0, 40).forEach(p => addMarker(p, '#e09f3e', 10));
         done();
       });
     } else {

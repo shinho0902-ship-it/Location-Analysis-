@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>만만마켓 입지분석 대시보드 - 용인 수지구</title>
+<script type="text/javascript" src="//dapi.kakao.com/v2/maps/sdk.js?appkey=6f1d458b95a43dd7cdf72a1c435e0ea2&libraries=services"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "Malgun Gothic", sans-serif; background: #f4f5f7; color: #222; }
+  header { background: #2d2a5e; color: #fff; padding: 20px 24px; }
+  header h1 { font-size: 20px; margin-bottom: 4px; }
+  header p { font-size: 13px; opacity: 0.8; }
+
+  .layout { display: flex; gap: 16px; padding: 16px; }
+  .panel { background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); padding: 16px; }
+
+  .controls { width: 260px; flex-shrink: 0; }
+  .controls label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; margin-top: 14px; }
+  .controls input[type="range"] { width: 100%; }
+  .controls .checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 14px; }
+  .radius-value { font-size: 13px; color: #555; }
+  button#searchBtn {
+    margin-top: 18px; width: 100%; padding: 10px; background: #2d2a5e; color: #fff;
+    border: none; border-radius: 6px; font-size: 14px; cursor: pointer;
+  }
+  button#searchBtn:hover { background: #423d8a; }
+
+  .map-area { flex: 1; }
+  #map { width: 100%; height: 520px; border-radius: 8px; }
+
+  .stats { width: 300px; flex-shrink: 0; display: flex; flex-direction: column; gap: 12px; }
+  .stat-card { display: flex; justify-content: space-between; align-items: center; }
+  .stat-card .num { font-size: 26px; font-weight: 700; }
+  .stat-card .label { font-size: 13px; color: #666; }
+  .stat-card.market .num { color: #d1495b; }
+  .stat-card.mart .num { color: #3d5a80; }
+  .stat-card.conv .num { color: #e09f3e; }
+
+  .list { max-height: 180px; overflow-y: auto; font-size: 13px; }
+  .list-item { padding: 6px 0; border-bottom: 1px solid #eee; }
+  .list-item .name { font-weight: 600; }
+  .list-item .addr { color: #888; font-size: 12px; }
+
+  .legend { display: flex; gap: 14px; font-size: 12px; margin-top: 10px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .dot.market { background: #d1495b; }
+  .dot.mart { background: #3d5a80; }
+  .dot.conv { background: #e09f3e; }
+
+  .note { font-size: 12px; color: #999; margin-top: 10px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🏪 만만마켓 입지분석 대시보드</h1>
+  <p>경기도 용인시 수지구 · 반경 내 매장 및 경쟁사 분포</p>
+</header>
+
+<div class="layout">
+  <div class="panel controls">
+    <h3>검색 설정</h3>
+    <label>검색 반경: <span class="radius-value" id="radiusValue">2000</span>m</label>
+    <input type="range" id="radiusSlider" min="500" max="5000" step="100" value="2000">
+
+    <div class="checkbox-row">
+      <input type="checkbox" id="showMart" checked>
+      <label style="margin:0;">마트/슈퍼마켓 표시</label>
+    </div>
+    <div class="checkbox-row">
+      <input type="checkbox" id="showConv" checked>
+      <label style="margin:0;">편의점 표시</label>
+    </div>
+
+    <button id="searchBtn">다시 검색</button>
+
+    <div class="legend">
+      <span><span class="dot market"></span>만만마켓</span>
+      <span><span class="dot mart"></span>마트</span>
+      <span><span class="dot conv"></span>편의점</span>
+    </div>
+
+    <p class="note">데이터: 카카오맵 장소 검색 API (실시간)</p>
+  </div>
+
+  <div class="panel map-area">
+    <div id="map"></div>
+  </div>
+
+  <div class="stats">
+    <div class="panel stat-card market">
+      <div><div class="label">만만마켓</div><div class="num" id="marketCount">-</div></div>
+    </div>
+    <div class="panel stat-card mart">
+      <div><div class="label">마트/슈퍼마켓</div><div class="num" id="martCount">-</div></div>
+    </div>
+    <div class="panel stat-card conv">
+      <div><div class="label">편의점</div><div class="num" id="convCount">-</div></div>
+    </div>
+
+    <div class="panel">
+      <h3 style="font-size:14px; margin-bottom:8px;">만만마켓 목록</h3>
+      <div class="list" id="marketList">검색 중...</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const SUJI = { lat: 37.32, lng: 127.05 };
+
+const map = new kakao.maps.Map(document.getElementById('map'), {
+  center: new kakao.maps.LatLng(SUJI.lat, SUJI.lng),
+  level: 6
+});
+
+const ps = new kakao.maps.services.Places();
+let overlays = [];
+
+function clearOverlays() {
+  overlays.forEach(o => o.setMap(null));
+  overlays = [];
+}
+
+function addMarker(place, color, size) {
+  const pos = new kakao.maps.LatLng(place.y, place.x);
+  const content = document.createElement('div');
+  content.style.width = size + 'px';
+  content.style.height = size + 'px';
+  content.style.borderRadius = '50%';
+  content.style.background = color;
+  content.style.border = '2px solid #fff';
+  content.style.boxShadow = '0 0 3px rgba(0,0,0,0.4)';
+  content.title = place.place_name;
+
+  const overlay = new kakao.maps.CustomOverlay({
+    position: pos,
+    content: content,
+    map: map
+  });
+  overlays.push(overlay);
+
+  kakao.maps.event.addListener(map, 'idle', () => {});
+  content.addEventListener('click', () => {
+    alert(place.place_name + '\n' + place.address_name);
+  });
+}
+
+function searchKeyword(query, radius, callback) {
+  ps.keywordSearch(query, (data, status) => {
+    if (status === kakao.maps.services.Status.OK) {
+      callback(data);
+    } else {
+      callback([]);
+    }
+  }, {
+    location: new kakao.maps.LatLng(SUJI.lat, SUJI.lng),
+    radius: radius,
+    sort: kakao.maps.services.SortBy.DISTANCE
+  });
+}
+
+function renderMarketList(places) {
+  const el = document.getElementById('marketList');
+  if (!places.length) {
+    el.innerHTML = '<div class="note">검색 반경 내 만만마켓이 없습니다.</div>';
+    return;
+  }
+  el.innerHTML = places.map(p => `
+    <div class="list-item">
+      <div class="name">${p.place_name}</div>
+      <div class="addr">${p.address_name}</div>
+    </div>
+  `).join('');
+}
+
+function runSearch() {
+  clearOverlays();
+  const radius = parseInt(document.getElementById('radiusSlider').value, 10);
+  const showMart = document.getElementById('showMart').checked;
+  const showConv = document.getElementById('showConv').checked;
+
+  searchKeyword('만만마켓', radius, (places) => {
+    document.getElementById('marketCount').textContent = places.length;
+    renderMarketList(places);
+    places.forEach(p => addMarker(p, '#d1495b', 16));
+  });
+
+  if (showMart) {
+    searchKeyword('마트', radius, (places) => {
+      document.getElementById('martCount').textContent = places.length;
+      places.slice(0, 20).forEach(p => addMarker(p, '#3d5a80', 10));
+    });
+  } else {
+    document.getElementById('martCount').textContent = '0';
+  }
+
+  if (showConv) {
+    searchKeyword('편의점', radius, (places) => {
+      document.getElementById('convCount').textContent = places.length;
+      places.slice(0, 20).forEach(p => addMarker(p, '#e09f3e', 10));
+    });
+  } else {
+    document.getElementById('convCount').textContent = '0';
+  }
+}
+
+document.getElementById('radiusSlider').addEventListener('input', (e) => {
+  document.getElementById('radiusValue').textContent = e.target.value;
+});
+document.getElementById('searchBtn').addEventListener('click', runSearch);
+
+runSearch();
+</script>
+
+</body>
+</html>

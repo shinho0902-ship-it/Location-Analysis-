@@ -77,6 +77,23 @@
   .pop-table th:first-child, .pop-table td:first-child { text-align: left; }
   .pop-table tr.total-row td { font-weight: 800; border-top: 2px solid #ccc; background: #fafbff; }
   .pop-cols { margin-top: 12px; font-size: 11px; color: #aaa; word-break: break-all; }
+
+  .pop-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin-top: 14px; }
+  .pop-card { background: #f6f7fb; border-radius: 10px; padding: 14px; border: 1px solid #eef0f6; }
+  .pop-card .dong { font-size: 13px; font-weight: 700; color: #444; margin-bottom: 6px; }
+  .pop-card .pop { font-size: 22px; font-weight: 800; color: #2d2a5e; }
+  .pop-card .unit { font-size: 12px; color: #999; font-weight: 500; margin-left: 2px; }
+  .pop-card.sum { background: #2d2a5e; border-color: #2d2a5e; }
+  .pop-card.sum .dong, .pop-card.sum .pop { color: #fff; }
+  .pop-card.sum .unit { color: #cfcde8; }
+
+  .grid-scroll { overflow-x: auto; margin-top: 18px; border: 1px solid #eee; border-radius: 8px; }
+  .grid-scroll table { border-collapse: collapse; font-size: 12px; white-space: nowrap; min-width: 100%; }
+  .grid-scroll th, .grid-scroll td { padding: 7px 10px; border-bottom: 1px solid #f0f0f0; border-right: 1px solid #f5f5f5; text-align: right; }
+  .grid-scroll th { background: #f6f7fb; position: sticky; top: 0; font-weight: 700; color: #555; }
+  .grid-scroll td:first-child, .grid-scroll th:first-child { text-align: left; position: sticky; left: 0; background: #fff; font-weight: 600; }
+  .grid-scroll th:first-child { background: #f6f7fb; z-index: 2; }
+  .grid-title { font-size: 14px; font-weight: 700; margin-top: 20px; color: #333; }
 </style>
 </head>
 <body>
@@ -156,8 +173,8 @@
 <div class="analysis panel" id="popPanel">
   <h2>👥 수지구 행정동별 인구 (주민등록)</h2>
   <p class="sub">출처: 행정안전부 지역별(행정동) 성별·연령별 주민등록 인구수 · 공공데이터포털</p>
-  <button id="loadPopBtn" style="width:auto; padding:8px 16px; background:#2d2a5e; color:#fff; border:none; border-radius:6px; font-size:13px; cursor:pointer;">인구 데이터 불러오기</button>
-  <p class="note" id="popStatus"></p>
+  <button id="loadPopBtn" style="width:auto; padding:8px 16px; background:#2d2a5e; color:#fff; border:none; border-radius:6px; font-size:13px; cursor:pointer;">새로고침</button>
+  <p class="note" id="popStatus">불러오는 중...</p>
   <div id="popResult"></div>
 </div>
 
@@ -241,26 +258,37 @@ async function loadPopulation() {
     }
     const suji = rows.filter(r => String(r[regionKey]).includes(POP_API.region));
     const totalKey = detectTotalKey(suji[0]);
+    const allCols = Object.keys(suji[0]);
 
-    let bodyRows = '';
+    // 1) 카드 그리드 — 행정동별 총인구 한눈에
     let sum = 0;
-    suji.forEach(r => {
-      const name = r[regionKey];
+    let cards = suji.map(r => {
       const pop = totalKey ? toNum(r[totalKey]) : 0;
       sum += pop;
-      bodyRows += '<tr><td>' + name + '</td><td>' + (totalKey ? fmt(pop) : '-') + '</td></tr>';
-    });
+      const shortName = String(r[regionKey]).replace(/.*수지구\s*/, '').trim() || r[regionKey];
+      return '<div class="pop-card"><div class="dong">' + shortName +
+        '</div><div class="pop">' + (totalKey ? fmt(pop) : '-') +
+        '<span class="unit">명</span></div></div>';
+    }).join('');
+    cards += '<div class="pop-card sum"><div class="dong">수지구 합계</div><div class="pop">' +
+      (totalKey ? fmt(sum) : '-') + '<span class="unit">명</span></div></div>';
+
+    // 2) 전체 컬럼 그리드 — 성별/연령별 원본 데이터 전부 (가로 스크롤)
+    const head = '<tr>' + allCols.map(c => '<th>' + c + '</th>').join('') + '</tr>';
+    const body = suji.map(r =>
+      '<tr>' + allCols.map(c => {
+        const v = r[c];
+        const n = String(v).replace(/,/g, '');
+        return '<td>' + (v !== '' && !isNaN(Number(n)) ? Number(n).toLocaleString('ko-KR') : v) + '</td>';
+      }).join('') + '</tr>'
+    ).join('');
 
     document.getElementById('popResult').innerHTML =
-      '<table class="pop-table"><thead><tr><th>행정동</th><th>' +
-      (totalKey || '(인구 컬럼 미감지)') + '</th></tr></thead><tbody>' +
-      bodyRows +
-      '<tr class="total-row"><td>수지구 합계</td><td>' + (totalKey ? fmt(sum) : '-') + '</td></tr>' +
-      '</tbody></table>' +
-      '<div class="pop-cols">감지된 컬럼: ' + Object.keys(suji[0]).join(' · ') + '</div>';
+      '<div class="pop-grid">' + cards + '</div>' +
+      '<div class="grid-title">📋 성별·연령별 상세 (전체 컬럼)</div>' +
+      '<div class="grid-scroll"><table><thead>' + head + '</thead><tbody>' + body + '</tbody></table></div>';
 
-    popStatus('✅ ' + suji.length + '개 행정동 로드 완료 (기준: ' + regionKey + ')');
-    btn.textContent = '새로고침';
+    popStatus('✅ ' + suji.length + '개 행정동 · 총 ' + fmt(sum) + '명 (기준 컬럼: ' + regionKey + ')');
     btn.disabled = false;
   } catch (err) {
     // CORS 실패 시 TypeError: Failed to fetch 형태로 잡힘
@@ -271,6 +299,8 @@ async function loadPopulation() {
 }
 
 document.getElementById('loadPopBtn').addEventListener('click', loadPopulation);
+// 페이지 로드 시 자동으로 미리 불러오기
+loadPopulation();
 
 // 슬라이더는 지도 로딩 여부와 무관하게 항상 동작해야 하므로 최상단에서 바로 연결
 document.getElementById('radiusSlider').addEventListener('input', (e) => {

@@ -70,6 +70,13 @@
   .bar-track { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; }
   .bar-fill { height: 100%; background: #4c72b0; border-radius: 4px; transition: width .3s; }
   .analysis .breakdown { margin-top: 16px; font-size: 12px; color: #666; line-height: 1.7; border-top: 1px solid #eee; padding-top: 12px; }
+
+  .pop-table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 13px; }
+  .pop-table th, .pop-table td { padding: 8px 10px; text-align: right; border-bottom: 1px solid #eee; }
+  .pop-table th { background: #f6f7fb; font-weight: 700; color: #444; }
+  .pop-table th:first-child, .pop-table td:first-child { text-align: left; }
+  .pop-table tr.total-row td { font-weight: 800; border-top: 2px solid #ccc; background: #fafbff; }
+  .pop-cols { margin-top: 12px; font-size: 11px; color: #aaa; word-break: break-all; }
 </style>
 </head>
 <body>
@@ -146,6 +153,14 @@
   <div class="breakdown" id="breakdown"></div>
 </div>
 
+<div class="analysis panel" id="popPanel">
+  <h2>👥 수지구 행정동별 인구 (주민등록)</h2>
+  <p class="sub">출처: 행정안전부 지역별(행정동) 성별·연령별 주민등록 인구수 · 공공데이터포털</p>
+  <button id="loadPopBtn" style="width:auto; padding:8px 16px; background:#2d2a5e; color:#fff; border:none; border-radius:6px; font-size:13px; cursor:pointer;">인구 데이터 불러오기</button>
+  <p class="note" id="popStatus"></p>
+  <div id="popResult"></div>
+</div>
+
 <script>
 const SUJI = { lat: 37.32, lng: 127.05 };
 const statusEl = document.getElementById('statusMsg');
@@ -153,6 +168,109 @@ const statusEl = document.getElementById('statusMsg');
 function setStatus(msg) {
   statusEl.textContent = msg;
 }
+
+// ── 주민등록 인구 (공공데이터포털 odcloud) ──────────────
+// GitHub Pages 정적 사이트라 브라우저에서 직접 호출. odcloud는 대개 CORS 허용.
+// ⚠ 인증키가 소스에 노출됨 — 무료/무제한 키라 리스크는 낮음(필요시 프록시로 이전 가능).
+const POP_API = {
+  base: 'https://api.odcloud.kr/api/15097972/v1/uddi:5702ac2f-e6b6-4db4-ba6e-8744c4bc364b',
+  // Decoding 키 (fetch에서 encodeURIComponent 처리)
+  key: 'zsS2ajJ7CEAcdRahz/PGbYGtiPNGamF99wlhAXE5TfQsWuX2goktY/57KBHved6iG9jCG8WER0IhC+UpuHLO7g==',
+  region: '수지구'   // 필터 키워드
+};
+
+function popStatus(msg) { document.getElementById('popStatus').textContent = msg; }
+
+async function fetchAllPages(perPage = 1000, maxPages = 20) {
+  const all = [];
+  for (let page = 1; page <= maxPages; page++) {
+    const url = POP_API.base +
+      '?page=' + page +
+      '&perPage=' + perPage +
+      '&returnType=JSON' +
+      '&serviceKey=' + encodeURIComponent(POP_API.key);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const json = await res.json();
+    const rows = json.data || [];
+    all.push(...rows);
+    if (rows.length < perPage) break;   // 마지막 페이지
+  }
+  return all;
+}
+
+// 행정동명이 들어있는 컬럼 자동 감지 (값에 '수지구'가 포함된 첫 컬럼)
+function detectRegionKey(rows) {
+  for (const row of rows) {
+    for (const k of Object.keys(row)) {
+      if (typeof row[k] === 'string' && row[k].includes(POP_API.region)) return k;
+    }
+  }
+  return null;
+}
+
+// 총인구 컬럼 자동 감지 (컬럼명에 '총'+'인구' 또는 '계' 포함, 값이 숫자형)
+function detectTotalKey(row) {
+  const keys = Object.keys(row);
+  const numeric = k => {
+    const v = String(row[k]).replace(/,/g, '');
+    return v !== '' && !isNaN(Number(v));
+  };
+  return keys.find(k => /총.*인구|인구.*총|총계|합계/.test(k) && numeric(k))
+      || keys.find(k => /인구/.test(k) && numeric(k))
+      || keys.find(k => /계/.test(k) && numeric(k))
+      || null;
+}
+
+function toNum(v) { return Number(String(v).replace(/,/g, '')) || 0; }
+function fmt(n) { return n.toLocaleString('ko-KR'); }
+
+async function loadPopulation() {
+  const btn = document.getElementById('loadPopBtn');
+  btn.disabled = true;
+  popStatus('공공데이터포털에서 불러오는 중... (전국 데이터라 몇 초 걸립니다)');
+  try {
+    const rows = await fetchAllPages();
+    if (!rows.length) { popStatus('⚠ 응답에 데이터가 없습니다.'); btn.disabled = false; return; }
+
+    const regionKey = detectRegionKey(rows);
+    if (!regionKey) {
+      popStatus('⚠ "' + POP_API.region + '"이 포함된 행이 없습니다. (데이터 기준시점/명칭 확인 필요)');
+      btn.disabled = false;
+      return;
+    }
+    const suji = rows.filter(r => String(r[regionKey]).includes(POP_API.region));
+    const totalKey = detectTotalKey(suji[0]);
+
+    let bodyRows = '';
+    let sum = 0;
+    suji.forEach(r => {
+      const name = r[regionKey];
+      const pop = totalKey ? toNum(r[totalKey]) : 0;
+      sum += pop;
+      bodyRows += '<tr><td>' + name + '</td><td>' + (totalKey ? fmt(pop) : '-') + '</td></tr>';
+    });
+
+    document.getElementById('popResult').innerHTML =
+      '<table class="pop-table"><thead><tr><th>행정동</th><th>' +
+      (totalKey || '(인구 컬럼 미감지)') + '</th></tr></thead><tbody>' +
+      bodyRows +
+      '<tr class="total-row"><td>수지구 합계</td><td>' + (totalKey ? fmt(sum) : '-') + '</td></tr>' +
+      '</tbody></table>' +
+      '<div class="pop-cols">감지된 컬럼: ' + Object.keys(suji[0]).join(' · ') + '</div>';
+
+    popStatus('✅ ' + suji.length + '개 행정동 로드 완료 (기준: ' + regionKey + ')');
+    btn.textContent = '새로고침';
+    btn.disabled = false;
+  } catch (err) {
+    // CORS 실패 시 TypeError: Failed to fetch 형태로 잡힘
+    popStatus('⚠ 호출 실패: ' + err.message +
+      ' — CORS 차단이면 정적 JSON 방식으로 전환해야 합니다. (콘솔 F12에서 상세 확인)');
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('loadPopBtn').addEventListener('click', loadPopulation);
 
 // 슬라이더는 지도 로딩 여부와 무관하게 항상 동작해야 하므로 최상단에서 바로 연결
 document.getElementById('radiusSlider').addEventListener('input', (e) => {

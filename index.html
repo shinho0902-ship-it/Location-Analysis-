@@ -94,8 +94,8 @@
       <label style="margin:0;">편의점 표시</label>
     </div>
 
-    <button id="searchBtn">이 위치에서 다시 검색</button>
-    <p class="note">💡 지도를 원하는 곳으로 옮긴 뒤 버튼을 누르면 그 지점(📍) 기준으로 다시 검색합니다.</p>
+    <button id="searchBtn">현재 핀 위치에서 다시 검색</button>
+    <p class="note">💡 지도의 핀을 <b>마우스로 끌어다 놓으면</b> 그 지점 기준으로 자동 재검색됩니다. (지도를 클릭해도 핀이 이동합니다)</p>
     <p class="note" id="statusMsg">초기화 중...</p>
 
     <div class="legend">
@@ -131,7 +131,7 @@
 
 <div class="analysis panel">
   <h2>📊 입지 종합 분석</h2>
-  <p class="sub">현재 지도 중심점(📍) 반경 기준 · 카카오맵 시설 데이터로 산출한 참고 지표입니다.</p>
+  <p class="sub">지도 핀 위치 반경 기준 · 카카오맵 시설 데이터로 산출한 참고 지표입니다.</p>
   <div class="score-wrap">
     <div class="score-circle" id="scoreCircle">
       <div class="val" id="scoreVal">-</div>
@@ -222,7 +222,7 @@ function initApp() {
         callback([], '검색 실패 (status: ' + status + ')');
       }
     }, {
-      location: map.getCenter(),
+      location: searchCenter(),
       radius: radius,
       sort: kakao.maps.services.SortBy.DISTANCE
     });
@@ -239,7 +239,7 @@ function initApp() {
         callback([], '검색 실패 (status: ' + status + ')');
       }
     }, {
-      location: map.getCenter(),
+      location: searchCenter(),
       radius: radius,
       sort: kakao.maps.services.SortBy.DISTANCE
     });
@@ -251,14 +251,14 @@ function initApp() {
       if (status === kakao.maps.services.Status.OK) cb(pagination.totalCount);
       else if (status === kakao.maps.services.Status.ZERO_RESULT) cb(0);
       else cb(null);
-    }, { location: map.getCenter(), radius: radius });
+    }, { location: searchCenter(), radius: radius });
   }
   function countKeyword(query, radius, cb) {
     ps.keywordSearch(query, (data, status, pagination) => {
       if (status === kakao.maps.services.Status.OK) cb(pagination.totalCount);
       else if (status === kakao.maps.services.Status.ZERO_RESULT) cb(0);
       else cb(null);
-    }, { location: map.getCenter(), radius: radius });
+    }, { location: searchCenter(), radius: radius });
   }
 
   // 여러 검색을 실행해 결과를 합치고 매장 ID로 중복 제거한 뒤 한 번만 콜백
@@ -417,28 +417,38 @@ function initApp() {
       '· 점수는 가중치 기반 <b>참고용 휴리스틱</b>이며, 실제 상권/임대료/접근성은 별도 검토가 필요합니다.';
   }
 
-  // 검색 중심점 표시용 마커 (현재 지도 중심 = 검색 기준점)
-  let centerMarker = null;
-  function updateCenterMarker() {
-    if (centerMarker) centerMarker.setMap(null);
-    const el = document.createElement('div');
-    el.innerHTML = '📍';
-    el.style.fontSize = '22px';
-    el.style.transform = 'translate(-50%, -100%)';
-    el.title = '검색 기준점 (지도 중심)';
-    centerMarker = new kakao.maps.CustomOverlay({
-      position: map.getCenter(),
-      content: el,
-      map: map,
-      zIndex: 5
-    });
+  // 드래그 가능한 검색 기준 핀 — 사용자가 손으로 옮겨 원하는 후보지를 지정한다
+  const searchMarker = new kakao.maps.Marker({
+    position: map.getCenter(),
+    draggable: true,
+    zIndex: 10
+  });
+  searchMarker.setMap(map);
+
+  // 모든 검색/집계의 기준점 = 핀 위치
+  function searchCenter() {
+    return searchMarker.getPosition();
   }
 
-  document.getElementById('searchBtn').addEventListener('click', () => {
-    updateCenterMarker();
+  function runAll() {
     runSearch();
     runLocationAnalysis();
+  }
+
+  // 핀을 놓는 순간 그 지점으로 자동 재검색
+  kakao.maps.event.addListener(searchMarker, 'dragend', () => {
+    setStatus('핀 위치에서 재검색 중...');
+    runAll();
   });
+
+  // 지도를 클릭해도 핀이 그 자리로 이동 후 재검색 (선택적 편의 기능)
+  kakao.maps.event.addListener(map, 'click', (mouseEvent) => {
+    searchMarker.setPosition(mouseEvent.latLng);
+    setStatus('선택 위치에서 재검색 중...');
+    runAll();
+  });
+
+  document.getElementById('searchBtn').addEventListener('click', runAll);
 
   // 최초 포커스: 상현2동 행정복지센터
   setStatus('상현2동 행정복지센터 위치 검색 중...');
@@ -447,11 +457,10 @@ function initApp() {
       const c = new kakao.maps.LatLng(data[0].y, data[0].x);
       map.setCenter(c);
       map.setLevel(5);
+      searchMarker.setPosition(c);
     }
-    // 위치를 못 찾아도 기본 중심에서 검색은 진행
-    updateCenterMarker();
-    runSearch();
-    runLocationAnalysis();
+    // 위치를 못 찾아도 기본 위치에서 검색은 진행
+    runAll();
   });
 }
 </script>

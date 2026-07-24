@@ -75,6 +75,7 @@
     </div>
 
     <button id="searchBtn">다시 검색</button>
+    <p class="note" id="statusMsg">초기화 중...</p>
 
     <div class="legend">
       <span><span class="dot market"></span>만만마켓</span>
@@ -109,109 +110,143 @@
 
 <script>
 const SUJI = { lat: 37.32, lng: 127.05 };
+const statusEl = document.getElementById('statusMsg');
 
-const map = new kakao.maps.Map(document.getElementById('map'), {
-  center: new kakao.maps.LatLng(SUJI.lat, SUJI.lng),
-  level: 6
-});
-
-const ps = new kakao.maps.services.Places();
-let overlays = [];
-
-function clearOverlays() {
-  overlays.forEach(o => o.setMap(null));
-  overlays = [];
+function setStatus(msg) {
+  statusEl.textContent = msg;
 }
 
-function addMarker(place, color, size) {
-  const pos = new kakao.maps.LatLng(place.y, place.x);
-  const content = document.createElement('div');
-  content.style.width = size + 'px';
-  content.style.height = size + 'px';
-  content.style.borderRadius = '50%';
-  content.style.background = color;
-  content.style.border = '2px solid #fff';
-  content.style.boxShadow = '0 0 3px rgba(0,0,0,0.4)';
-  content.title = place.place_name;
-
-  const overlay = new kakao.maps.CustomOverlay({
-    position: pos,
-    content: content,
-    map: map
-  });
-  overlays.push(overlay);
-
-  kakao.maps.event.addListener(map, 'idle', () => {});
-  content.addEventListener('click', () => {
-    alert(place.place_name + '\n' + place.address_name);
-  });
-}
-
-function searchKeyword(query, radius, callback) {
-  ps.keywordSearch(query, (data, status) => {
-    if (status === kakao.maps.services.Status.OK) {
-      callback(data);
-    } else {
-      callback([]);
-    }
-  }, {
-    location: new kakao.maps.LatLng(SUJI.lat, SUJI.lng),
-    radius: radius,
-    sort: kakao.maps.services.SortBy.DISTANCE
-  });
-}
-
-function renderMarketList(places) {
-  const el = document.getElementById('marketList');
-  if (!places.length) {
-    el.innerHTML = '<div class="note">검색 반경 내 만만마켓이 없습니다.</div>';
-    return;
-  }
-  el.innerHTML = places.map(p => `
-    <div class="list-item">
-      <div class="name">${p.place_name}</div>
-      <div class="addr">${p.address_name}</div>
-    </div>
-  `).join('');
-}
-
-function runSearch() {
-  clearOverlays();
-  const radius = parseInt(document.getElementById('radiusSlider').value, 10);
-  const showMart = document.getElementById('showMart').checked;
-  const showConv = document.getElementById('showConv').checked;
-
-  searchKeyword('만만마켓', radius, (places) => {
-    document.getElementById('marketCount').textContent = places.length;
-    renderMarketList(places);
-    places.forEach(p => addMarker(p, '#d1495b', 16));
-  });
-
-  if (showMart) {
-    searchKeyword('마트', radius, (places) => {
-      document.getElementById('martCount').textContent = places.length;
-      places.slice(0, 20).forEach(p => addMarker(p, '#3d5a80', 10));
-    });
-  } else {
-    document.getElementById('martCount').textContent = '0';
-  }
-
-  if (showConv) {
-    searchKeyword('편의점', radius, (places) => {
-      document.getElementById('convCount').textContent = places.length;
-      places.slice(0, 20).forEach(p => addMarker(p, '#e09f3e', 10));
-    });
-  } else {
-    document.getElementById('convCount').textContent = '0';
-  }
-}
-
+// 슬라이더는 지도 로딩 여부와 무관하게 항상 동작해야 하므로 최상단에서 바로 연결
 document.getElementById('radiusSlider').addEventListener('input', (e) => {
   document.getElementById('radiusValue').textContent = e.target.value;
 });
-document.getElementById('searchBtn').addEventListener('click', runSearch);
 
-runSearch();
+if (typeof kakao === 'undefined' || !kakao.maps) {
+  setStatus('⚠ 카카오맵 SDK 로딩 실패 (앱키/도메인 등록을 확인하세요)');
+  document.getElementById('searchBtn').disabled = true;
+} else {
+  initApp();
+}
+
+function initApp() {
+  let map, ps;
+  try {
+    map = new kakao.maps.Map(document.getElementById('map'), {
+      center: new kakao.maps.LatLng(SUJI.lat, SUJI.lng),
+      level: 6
+    });
+    ps = new kakao.maps.services.Places();
+  } catch (err) {
+    setStatus('⚠ 지도 초기화 오류: ' + err.message);
+    return;
+  }
+
+  let overlays = [];
+
+  function clearOverlays() {
+    overlays.forEach(o => o.setMap(null));
+    overlays = [];
+  }
+
+  function addMarker(place, color, size) {
+    const pos = new kakao.maps.LatLng(place.y, place.x);
+    const content = document.createElement('div');
+    content.style.width = size + 'px';
+    content.style.height = size + 'px';
+    content.style.borderRadius = '50%';
+    content.style.background = color;
+    content.style.border = '2px solid #fff';
+    content.style.boxShadow = '0 0 3px rgba(0,0,0,0.4)';
+    content.title = place.place_name;
+    content.style.cursor = 'pointer';
+
+    const overlay = new kakao.maps.CustomOverlay({
+      position: pos,
+      content: content,
+      map: map
+    });
+    overlays.push(overlay);
+
+    content.addEventListener('click', () => {
+      alert(place.place_name + '\n' + place.address_name);
+    });
+  }
+
+  // callback(places, errorMessage) — errorMessage는 실제 API 에러일 때만 채워짐 (결과 0건과 구분)
+  function searchKeyword(query, radius, callback) {
+    ps.keywordSearch(query, (data, status) => {
+      if (status === kakao.maps.services.Status.OK) {
+        callback(data, null);
+      } else if (status === kakao.maps.services.Status.ZERO_RESULT) {
+        callback([], null);
+      } else {
+        callback([], '검색 실패 (status: ' + status + ')');
+      }
+    }, {
+      location: new kakao.maps.LatLng(SUJI.lat, SUJI.lng),
+      radius: radius,
+      sort: kakao.maps.services.SortBy.DISTANCE
+    });
+  }
+
+  function renderMarketList(places, errorMessage) {
+    const el = document.getElementById('marketList');
+    if (errorMessage) {
+      el.innerHTML = '<div class="note">⚠ ' + errorMessage + '</div>';
+      return;
+    }
+    if (!places.length) {
+      el.innerHTML = '<div class="note">검색 반경 내 만만마켓이 없습니다.</div>';
+      return;
+    }
+    el.innerHTML = places.map(p => `
+      <div class="list-item">
+        <div class="name">${p.place_name}</div>
+        <div class="addr">${p.address_name}</div>
+      </div>
+    `).join('');
+  }
+
+  function runSearch() {
+    setStatus('검색 중...');
+    clearOverlays();
+    const radius = parseInt(document.getElementById('radiusSlider').value, 10);
+    const showMart = document.getElementById('showMart').checked;
+    const showConv = document.getElementById('showConv').checked;
+    let pending = 1 + (showMart ? 1 : 0) + (showConv ? 1 : 0);
+    const done = () => { pending--; if (pending === 0) setStatus('검색 완료 (' + new Date().toLocaleTimeString() + ')'); };
+
+    searchKeyword('만만마켓', radius, (places, err) => {
+      document.getElementById('marketCount').textContent = err ? '-' : places.length;
+      renderMarketList(places, err);
+      places.forEach(p => addMarker(p, '#d1495b', 16));
+      done();
+    });
+
+    if (showMart) {
+      searchKeyword('마트', radius, (places, err) => {
+        document.getElementById('martCount').textContent = err ? '-' : places.length;
+        places.slice(0, 20).forEach(p => addMarker(p, '#3d5a80', 10));
+        done();
+      });
+    } else {
+      document.getElementById('martCount').textContent = '0';
+    }
+
+    if (showConv) {
+      searchKeyword('편의점', radius, (places, err) => {
+        document.getElementById('convCount').textContent = err ? '-' : places.length;
+        places.slice(0, 20).forEach(p => addMarker(p, '#e09f3e', 10));
+        done();
+      });
+    } else {
+      document.getElementById('convCount').textContent = '0';
+    }
+  }
+
+  document.getElementById('searchBtn').addEventListener('click', runSearch);
+  runSearch();
+}
 </script>
 
 </body>

@@ -50,6 +50,26 @@
   .dot.conv { background: #e09f3e; }
 
   .note { font-size: 12px; color: #999; margin-top: 10px; }
+
+  .analysis { margin: 0 16px 16px; }
+  .analysis h2 { font-size: 18px; margin-bottom: 4px; }
+  .analysis .sub { font-size: 12px; color: #888; margin-bottom: 16px; }
+  .score-wrap { display: flex; gap: 24px; align-items: center; flex-wrap: wrap; }
+  .score-circle {
+    width: 130px; height: 130px; border-radius: 50%; flex-shrink: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    color: #fff; background: #888;
+  }
+  .score-circle .val { font-size: 40px; font-weight: 800; line-height: 1; }
+  .score-circle .cap { font-size: 12px; opacity: 0.9; margin-top: 4px; }
+  .score-grade { font-size: 15px; font-weight: 700; }
+  .bars { flex: 1; min-width: 280px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px; }
+  .bar-row { font-size: 13px; }
+  .bar-row .bl { display: flex; justify-content: space-between; margin-bottom: 3px; }
+  .bar-row .bl .cnt { font-weight: 700; }
+  .bar-track { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; }
+  .bar-fill { height: 100%; background: #4c72b0; border-radius: 4px; transition: width .3s; }
+  .analysis .breakdown { margin-top: 16px; font-size: 12px; color: #666; line-height: 1.7; border-top: 1px solid #eee; padding-top: 12px; }
 </style>
 </head>
 <body>
@@ -107,6 +127,23 @@
       <div class="list" id="marketList">검색 중...</div>
     </div>
   </div>
+</div>
+
+<div class="analysis panel">
+  <h2>📊 입지 종합 분석</h2>
+  <p class="sub">현재 지도 중심점(📍) 반경 기준 · 카카오맵 시설 데이터로 산출한 참고 지표입니다.</p>
+  <div class="score-wrap">
+    <div class="score-circle" id="scoreCircle">
+      <div class="val" id="scoreVal">-</div>
+      <div class="cap">/ 100점</div>
+    </div>
+    <div style="flex-shrink:0;">
+      <div class="score-grade" id="scoreGrade">분석 중...</div>
+      <div class="note" id="scoreDesc"></div>
+    </div>
+    <div class="bars" id="facilityBars"></div>
+  </div>
+  <div class="breakdown" id="breakdown"></div>
 </div>
 
 <script>
@@ -208,6 +245,22 @@ function initApp() {
     });
   }
 
+  // 반경 내 총 개수만 필요할 때 (pagination.totalCount 사용 — 15개 페이지 제한과 무관하게 정확)
+  function countCategory(code, radius, cb) {
+    ps.categorySearch(code, (data, status, pagination) => {
+      if (status === kakao.maps.services.Status.OK) cb(pagination.totalCount);
+      else if (status === kakao.maps.services.Status.ZERO_RESULT) cb(0);
+      else cb(null);
+    }, { location: map.getCenter(), radius: radius });
+  }
+  function countKeyword(query, radius, cb) {
+    ps.keywordSearch(query, (data, status, pagination) => {
+      if (status === kakao.maps.services.Status.OK) cb(pagination.totalCount);
+      else if (status === kakao.maps.services.Status.ZERO_RESULT) cb(0);
+      else cb(null);
+    }, { location: map.getCenter(), radius: radius });
+  }
+
   // 여러 검색을 실행해 결과를 합치고 매장 ID로 중복 제거한 뒤 한 번만 콜백
   function searchMerged(tasks, callback) {
     let remaining = tasks.length;
@@ -285,6 +338,85 @@ function initApp() {
     }
   }
 
+  // ── 입지 종합 분석 ──────────────────────────────────
+  // 집객시설(유동인구 대리지표)과 경쟁현황을 반경 내 개수로 집계해 0~100 점수화
+  const FACILITIES = [
+    { key: 'subway',   code: 'SW8', label: '지하철역', weight: 10 },
+    { key: 'school',   code: 'SC4', label: '학교',     weight: 3 },
+    { key: 'hospital', code: 'HP8', label: '병원',     weight: 2 },
+    { key: 'bank',     code: 'BK9', label: '은행',     weight: 2 },
+    { key: 'cafe',     code: 'CE7', label: '카페',     weight: 0.5 },
+    { key: 'food',     code: 'FD6', label: '음식점',   weight: 0.2 }
+  ];
+
+  function runLocationAnalysis() {
+    const radius = parseInt(document.getElementById('radiusSlider').value, 10);
+    const counts = {};
+    const tasks = [];
+
+    FACILITIES.forEach(f => tasks.push(cb => countCategory(f.code, radius, n => { counts[f.key] = n || 0; cb(); })));
+    tasks.push(cb => countKeyword('아파트', radius, n => { counts.apt = n || 0; cb(); }));
+    tasks.push(cb => countCategory('MT1', radius, n => { counts.mart = n || 0; cb(); }));
+    tasks.push(cb => countKeyword('슈퍼', radius, n => { counts.superm = n || 0; cb(); }));
+    tasks.push(cb => countCategory('CS2', radius, n => { counts.conv = n || 0; cb(); }));
+
+    document.getElementById('scoreGrade').textContent = '분석 중...';
+    let remaining = tasks.length;
+    tasks.forEach(t => t(() => { if (--remaining === 0) renderAnalysis(counts, radius); }));
+  }
+
+  function renderAnalysis(c, radius) {
+    // 집객점수 (0~70): 유동인구 유발 시설 가중합
+    const trafficRaw =
+      (c.subway || 0) * 10 + (c.school || 0) * 3 + (c.hospital || 0) * 2 +
+      (c.bank || 0) * 2 + (c.apt || 0) * 2 + (c.cafe || 0) * 0.5 + (c.food || 0) * 0.2;
+    const trafficScore = Math.min(70, trafficRaw);
+
+    // 경쟁 페널티 (0~30): 마트/슈퍼는 직접경쟁이라 가중 ↑, 편의점은 ↓
+    const compRaw = (c.mart || 0) * 3 + (c.superm || 0) * 2 + (c.conv || 0) * 1;
+    const compPenalty = Math.min(30, compRaw);
+
+    // 종합점수 = 집객점수 + 기본 30 - 경쟁 페널티, 0~100 클램프
+    const total = Math.max(0, Math.min(100, Math.round(trafficScore + 30 - compPenalty)));
+
+    let grade, color;
+    if (total >= 75)      { grade = 'A · 매우 우수'; color = '#2e7d32'; }
+    else if (total >= 60) { grade = 'B · 우수';      color = '#558b2f'; }
+    else if (total >= 45) { grade = 'C · 보통';      color = '#f9a825'; }
+    else if (total >= 30) { grade = 'D · 다소 불리'; color = '#ef6c00'; }
+    else                  { grade = 'E · 불리';      color = '#c62828'; }
+
+    document.getElementById('scoreVal').textContent = total;
+    document.getElementById('scoreCircle').style.background = color;
+    document.getElementById('scoreGrade').textContent = grade;
+    document.getElementById('scoreGrade').style.color = color;
+    document.getElementById('scoreDesc').textContent =
+      '집객점수 ' + Math.round(trafficScore) + ' + 기본 30 − 경쟁 ' + Math.round(compPenalty);
+
+    // 시설 카운트 막대 (지표별 상대 표시)
+    const barDefs = [
+      { label: '지하철역', v: c.subway, max: 5 },
+      { label: '아파트단지', v: c.apt, max: 40 },
+      { label: '학교', v: c.school, max: 15 },
+      { label: '병원', v: c.hospital, max: 40 },
+      { label: '은행', v: c.bank, max: 20 },
+      { label: '카페·음식점', v: (c.cafe || 0) + (c.food || 0), max: 300 }
+    ];
+    document.getElementById('facilityBars').innerHTML = barDefs.map(b => {
+      const pct = Math.min(100, Math.round((b.v || 0) / b.max * 100));
+      return '<div class="bar-row"><div class="bl"><span>' + b.label +
+        '</span><span class="cnt">' + (b.v || 0) + '개</span></div>' +
+        '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%"></div></div></div>';
+    }).join('');
+
+    const km = (radius / 1000).toFixed(1);
+    document.getElementById('breakdown').innerHTML =
+      '<b>산출 기준 (반경 ' + km + 'km):</b><br>' +
+      '· <b>유동인구 대리지표</b> = 지하철역·아파트·학교·병원·은행·카페/음식점 밀도 (실제 유동인구 데이터는 2단계에서 공공데이터로 연동 예정)<br>' +
+      '· <b>경쟁 현황</b> = 마트/슈퍼 ' + ((c.mart || 0) + (c.superm || 0)) + '개, 편의점 ' + (c.conv || 0) + '개<br>' +
+      '· 점수는 가중치 기반 <b>참고용 휴리스틱</b>이며, 실제 상권/임대료/접근성은 별도 검토가 필요합니다.';
+  }
+
   // 검색 중심점 표시용 마커 (현재 지도 중심 = 검색 기준점)
   let centerMarker = null;
   function updateCenterMarker() {
@@ -305,6 +437,7 @@ function initApp() {
   document.getElementById('searchBtn').addEventListener('click', () => {
     updateCenterMarker();
     runSearch();
+    runLocationAnalysis();
   });
 
   // 최초 포커스: 상현2동 행정복지센터
@@ -318,6 +451,7 @@ function initApp() {
     // 위치를 못 찾아도 기본 중심에서 검색은 진행
     updateCenterMarker();
     runSearch();
+    runLocationAnalysis();
   });
 }
 </script>
